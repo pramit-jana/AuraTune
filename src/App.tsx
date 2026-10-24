@@ -22,6 +22,8 @@ import {
   StickyNote,
   LogOut,
   X,
+  Smartphone,
+  Download,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import {
@@ -46,6 +48,8 @@ import {
 import { fetchPersonalizedYouTubeMusic } from './services/youtubeMusicService';
 import { PlayerBar } from './components/PlayerBar';
 import { ConfirmModal } from './components/ConfirmModal';
+import { usePWAInstall } from './hooks/usePWAInstall';
+import { AndroidInstallModal } from './components/AndroidInstallModal';
 
 // Strictly 4 Main Sections: Home, Search, Library, Create Playlist
 type MainSection = 'home' | 'search' | 'library' | 'create-playlist';
@@ -95,6 +99,8 @@ export default function App() {
 
   // Mood Calibration Drawer Toggle on Home
   const [showMoodSlidersOnHome, setShowMoodSlidersOnHome] = useState(false);
+  const [isAndroidModalOpen, setIsAndroidModalOpen] = useState(false);
+  const { isInstallable, isInstalled, promptInstall } = usePWAInstall();
 
   // Background Audio Playback State (100% YouTube Music Audio, no video popup)
   const [currentTrack, setCurrentTrack] = useState<YouTubeMusicTrack | null>(
@@ -697,9 +703,9 @@ export default function App() {
   }, [autoCachedSongs]);
 
   return (
-    <div className="min-h-screen bg-[#090d16] text-slate-100 pb-28">
-      {/* Mandatory 3-Zone Top Bar Contract with the 4 Requested Sections */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-8 px-6 py-4 border-b border-slate-800/80 bg-[#090d16]/90 backdrop-blur-md">
+    <div className="min-h-screen bg-[#090d16] text-slate-100 pb-32 overflow-x-hidden">
+      {/* Mandatory 3-Zone Top Bar Contract with the 4 Requested Sections (Responsive 2-row on 6.2" mobile, 1-row on md+) */}
+      <header className="sticky top-0 z-30 flex flex-wrap md:flex-nowrap items-center justify-between gap-x-3 gap-y-2 md:gap-8 px-3.5 sm:px-6 py-2.5 sm:py-3.5 border-b border-slate-800/80 bg-[#090d16]/95 backdrop-blur-md">
         {/* Zone 1: Single text element wordmark */}
         <a
           href="#home"
@@ -707,7 +713,7 @@ export default function App() {
             e.preventDefault();
             setActiveSection('home');
           }}
-          className="text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0"
+          className="order-1 text-base sm:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0"
         >
           AuraTune
         </a>
@@ -715,14 +721,14 @@ export default function App() {
         {/* Zone 2: 4 Navigation Links: Home, Search, Library, Create Playlist */}
         <nav
           aria-label="Primary Navigation"
-          className="flex items-center gap-6 text-sm font-medium text-slate-400 overflow-x-auto"
+          className="order-3 md:order-2 w-full md:w-auto grid grid-cols-4 md:flex items-center gap-1 md:gap-6 pt-2 md:pt-0 border-t border-slate-800/70 md:border-t-0 text-xs sm:text-sm font-medium text-slate-400"
         >
           <button
             type="button"
             onClick={() => setActiveSection('home')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
+            className={`py-1.5 md:py-1 text-center transition-colors whitespace-nowrap shrink-0 border-b-2 ${
               activeSection === 'home'
-                ? 'text-white border-emerald-400'
+                ? 'text-white border-emerald-400 font-semibold'
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
@@ -731,9 +737,9 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSection('search')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
+            className={`py-1.5 md:py-1 text-center transition-colors whitespace-nowrap shrink-0 border-b-2 ${
               activeSection === 'search'
-                ? 'text-white border-emerald-400'
+                ? 'text-white border-emerald-400 font-semibold'
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
@@ -742,9 +748,9 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSection('library')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
+            className={`py-1.5 md:py-1 text-center transition-colors whitespace-nowrap shrink-0 border-b-2 ${
               activeSection === 'library'
-                ? 'text-white border-emerald-400'
+                ? 'text-white border-emerald-400 font-semibold'
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
@@ -753,9 +759,9 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSection('create-playlist')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
+            className={`py-1.5 md:py-1 text-center transition-colors whitespace-nowrap shrink-0 border-b-2 ${
               activeSection === 'create-playlist'
-                ? 'text-white border-emerald-400'
+                ? 'text-white border-emerald-400 font-semibold'
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
@@ -764,7 +770,7 @@ export default function App() {
         </nav>
 
         {/* Zone 3: 1 Primary Action */}
-        <div className="flex items-center shrink-0">
+        <div className="order-2 md:order-3 flex items-center shrink-0">
           {needsAuth ? (
             <button
               type="button"
@@ -810,10 +816,13 @@ export default function App() {
               type="button"
               onClick={syncHomeYouTubeRecommendations}
               disabled={isLoadingYouTube}
-              className="px-4 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5"
+              className="px-3 sm:px-4 py-1.5 sm:py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>
+              <span className="sm:hidden">
+                {isLoadingYouTube ? 'Updating...' : 'Refresh Mix'}
+              </span>
+              <span className="hidden sm:inline">
                 {isLoadingYouTube
                   ? 'Updating Mix...'
                   : 'Refresh Recommendations'}
@@ -823,29 +832,68 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1380px] px-6 pt-8 space-y-10">
+      <main className="mx-auto max-w-[1380px] px-3.5 sm:px-6 pt-4 sm:pt-8 space-y-6 sm:space-y-10">
+        {/* Android / Mobile PWA Install Bar */}
+        {!isInstalled && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-xl bg-slate-900/90 border border-slate-800/90">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                <Smartphone className="w-4 h-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-white truncate">
+                  Install AuraTune on Your Android Phone
+                </p>
+                <p className="text-[11px] text-slate-400 line-clamp-1">
+                  Full-screen mobile playback & auto-cached recent songs
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+              {isInstallable && (
+                <button
+                  type="button"
+                  onClick={promptInstall}
+                  className="flex-1 sm:flex-initial justify-center px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Install App</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsAndroidModalOpen(true)}
+                className="flex-1 sm:flex-initial justify-center px-3 py-1.5 text-xs font-medium text-emerald-300 bg-slate-950/90 hover:bg-slate-800 border border-emerald-500/30 rounded-lg transition-colors flex items-center gap-1.5"
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                <span>Android Setup & QR</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* =========================================================
             SECTION 1: HOME (Recommended YouTube Music Based on Listening & Mood)
            ========================================================= */}
         {activeSection === 'home' && (
-          <div className="space-y-10">
+          <div className="space-y-6 sm:space-y-10">
             {/* Hero Split: Listening-Driven YouTube Music + Mood Calibration */}
-            <section className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch border-b border-slate-800/80 pb-10">
-              <div className="lg:col-span-7 flex flex-col justify-between space-y-6">
-                <div className="space-y-3">
-                  <p className="text-xs font-medium text-emerald-400 tracking-wide">
+            <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-8 items-stretch border-b border-slate-800/80 pb-6 sm:pb-10">
+              <div className="lg:col-span-7 flex flex-col justify-between space-y-4 sm:space-y-6">
+                <div className="space-y-2 sm:space-y-3">
+                  <p className="text-[11px] sm:text-xs font-medium text-emerald-400 tracking-wide truncate">
                     Home · YouTube Music & Mood Discovery{' '}
                     {user
-                      ? `· Signed in as ${user.displayName || user.email}`
+                      ? `· ${user.displayName || user.email}`
                       : ''}
                   </p>
                   <h1
-                    className="text-3xl sm:text-4xl lg:text-[40px] font-bold tracking-tight text-white leading-[1.15]"
+                    className="text-2xl sm:text-4xl lg:text-[40px] font-bold tracking-tight text-white leading-[1.18]"
                     style={{ textWrap: 'balance' }}
                   >
                     Recommended YouTube Music shaped by your recent listening.
                   </h1>
-                  <p className="text-sm sm:text-base text-slate-300 max-w-2xl leading-relaxed">
+                  <p className="text-xs sm:text-base text-slate-300 max-w-2xl leading-relaxed">
                     Every song you play streams seamlessly in the background
                     audio bar and is automatically cached to personalize your
                     YouTube Music recommendations ({moodProfile.presetName}).
@@ -853,7 +901,7 @@ export default function App() {
                 </div>
 
                 {/* Quick Mood Preset Bar */}
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400">
                     <span>Current Listening Mood</span>
                     <button
@@ -864,12 +912,12 @@ export default function App() {
                       <Sliders className="w-3.5 h-3.5" />
                       <span>
                         {showMoodSlidersOnHome
-                          ? 'Hide Mood Sliders'
-                          : 'Adjust Mood Sliders'}
+                          ? 'Hide Sliders'
+                          : 'Mood Sliders'}
                       </span>
                     </button>
                   </div>
-                  <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-900/90 border border-slate-800/80 rounded-xl">
+                  <div className="flex overflow-x-auto no-scrollbar sm:flex-wrap items-center gap-1.5 p-1.5 bg-slate-900/90 border border-slate-800/80 rounded-xl">
                     {MOOD_PRESETS.map((preset) => {
                       const isActive =
                         moodProfile.presetName === preset.presetName;
@@ -963,14 +1011,14 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="flex flex-wrap items-center gap-3 pt-1">
+                <div className="flex flex-wrap items-center gap-2.5 pt-1">
                   {ytRecommendedTracks[0] && (
                     <button
                       type="button"
                       onClick={() =>
                         handlePlayYouTubeTrack(ytRecommendedTracks[0])
                       }
-                      className="px-5 py-2.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
+                      className="flex-1 sm:flex-initial justify-center px-4 sm:px-5 py-2.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
                     >
                       {isPlaying &&
                       currentTrack?.videoId ===
@@ -982,7 +1030,7 @@ export default function App() {
                       ) : (
                         <>
                           <Play className="w-4 h-4 fill-current" />
-                          <span>Play Top YouTube Match</span>
+                          <span>Play Top Match</span>
                         </>
                       )}
                     </button>
@@ -991,20 +1039,20 @@ export default function App() {
                     type="button"
                     onClick={syncHomeYouTubeRecommendations}
                     disabled={isLoadingYouTube}
-                    className="px-4 py-2.5 text-xs font-semibold text-slate-200 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
+                    className="flex-1 sm:flex-initial justify-center px-3.5 sm:px-4 py-2.5 text-xs font-semibold text-slate-200 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
                   >
                     <RefreshCw
                       className={`w-3.5 h-3.5 text-emerald-400 ${
                         isLoadingYouTube ? 'animate-spin' : ''
                       }`}
                     />
-                    <span>Refresh From Listening History</span>
+                    <span>Refresh From History</span>
                   </button>
                 </div>
               </div>
 
               {/* Right Spotlight: Recent Hearing & Auto-Cache Status Card */}
-              <div className="lg:col-span-5 rounded-xl border border-slate-800/80 bg-slate-900/50 p-6 flex flex-col justify-between gap-5">
+              <div className="lg:col-span-5 rounded-xl border border-slate-800/80 bg-slate-900/50 p-4 sm:p-6 flex flex-col justify-between gap-4 sm:gap-5">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-emerald-400">
@@ -1448,43 +1496,43 @@ export default function App() {
               </section>
             )}
 
-            {/* Customizable Browse Cards Grid (Pop, Hip-Hop, EDM, Hindi, English, Bengali, etc.) */}
+            {/* Customizable Browse Cards Grid (2 columns on 6.2-inch Android mobile, 4 columns on desktop) */}
             <section className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-white">
-                  Browse by Genre & Language ({searchCategories.length} Cards)
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-base sm:text-lg font-bold text-white">
+                  Browse by Genre & Language ({searchCategories.length})
                 </h2>
-                <span className="text-xs text-slate-400">
-                  Click any card to load tracks
+                <span className="text-[11px] sm:text-xs text-slate-400">
+                  Tap any card to play
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4">
                 {searchCategories.map((card) => {
                   const isSelected = activeSearchCategory?.id === card.id;
                   return (
                     <div
                       key={card.id}
                       style={{ background: card.bgGradient }}
-                      className={`relative rounded-xl border p-5 transition-transform hover:-translate-y-0.5 flex flex-col justify-between min-h-[124px] ${
+                      className={`relative rounded-xl border p-3.5 sm:p-5 transition-transform hover:-translate-y-0.5 flex flex-col justify-between min-h-[104px] sm:min-h-[124px] ${
                         isSelected
                           ? 'border-emerald-400 ring-1 ring-emerald-400/50'
                           : 'border-slate-800/90'
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start justify-between gap-1.5">
                         <button
                           type="button"
                           onClick={() => {
                             setSearchInput(card.name);
                             executeSearchQuery(card.query, card);
                           }}
-                          className="text-left flex-1 focus:outline-none"
+                          className="text-left flex-1 min-w-0 focus:outline-none"
                         >
-                          <h3 className="text-lg font-bold text-white">
+                          <h3 className="text-sm sm:text-lg font-bold text-white truncate">
                             {card.name}
                           </h3>
-                          <p className="text-xs text-slate-300 mt-1 line-clamp-2">
+                          <p className="text-[11px] sm:text-xs text-slate-300 mt-1 line-clamp-2">
                             {card.subtitle}
                           </p>
                         </button>
@@ -1494,16 +1542,16 @@ export default function App() {
                             type="button"
                             onClick={() => handleDeleteCategoryCard(card.id)}
                             aria-label={`Remove ${card.name} card`}
-                            className="p-1 text-slate-300 hover:text-rose-400 bg-black/40 rounded-md"
+                            className="p-1 text-slate-300 hover:text-rose-400 bg-black/40 rounded-md shrink-0"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between pt-3 mt-2 border-t border-white/10 text-[11px] text-slate-300">
-                        <span>
-                          {card.isCustom ? 'Custom Card' : 'Curated Category'}
+                      <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-white/10 text-[10px] sm:text-[11px] text-slate-300">
+                        <span className="truncate">
+                          {card.isCustom ? 'Custom' : 'Genre Mix'}
                         </span>
                         <button
                           type="button"
@@ -1511,7 +1559,7 @@ export default function App() {
                             setSearchInput(card.name);
                             executeSearchQuery(card.query, card);
                           }}
-                          className="font-semibold text-white hover:underline flex items-center gap-1"
+                          className="font-semibold text-white hover:underline flex items-center gap-1 shrink-0"
                         >
                           <Play className="w-3 h-3 fill-current" />
                           <span>Explore</span>
@@ -1655,43 +1703,49 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Segmented Sub-Tab Controls for Library */}
-              <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-xl">
+              {/* Segmented Sub-Tab Controls for Library (3 equal columns on 6.2-inch mobile) */}
+              <div className="grid grid-cols-3 sm:flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-xl w-full md:w-auto">
                 <button
                   type="button"
                   onClick={() => setLibrarySubTab('saved-songs')}
-                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                  className={`px-2 sm:px-3.5 py-2 sm:py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap ${
                     librarySubTab === 'saved-songs'
                       ? 'bg-emerald-500 text-slate-950'
                       : 'text-slate-300 hover:text-white'
                   }`}
                 >
-                  <Heart className="w-3.5 h-3.5" />
-                  <span>Saved Songs ({savedLibrarySongs.length})</span>
+                  <Heart className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    Saved ({savedLibrarySongs.length})
+                  </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setLibrarySubTab('auto-cache')}
-                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                  className={`px-2 sm:px-3.5 py-2 sm:py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap ${
                     librarySubTab === 'auto-cache'
                       ? 'bg-emerald-500 text-slate-950'
                       : 'text-slate-300 hover:text-white'
                   }`}
                 >
-                  <HardDrive className="w-3.5 h-3.5" />
-                  <span>Auto-Cached Recent ({autoCachedSongs.length})</span>
+                  <HardDrive className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    Cached ({autoCachedSongs.length})
+                  </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setLibrarySubTab('keep-notes')}
-                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                  className={`px-2 sm:px-3.5 py-2 sm:py-1.5 text-[11px] sm:text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap ${
                     librarySubTab === 'keep-notes'
                       ? 'bg-emerald-500 text-slate-950'
                       : 'text-slate-300 hover:text-white'
                   }`}
                 >
-                  <StickyNote className="w-3.5 h-3.5" />
-                  <span>Keep Notes ({keepNotes.length})</span>
+                  <StickyNote className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    Keep ({keepNotes.length})
+                  </span>
                 </button>
               </div>
             </div>
@@ -1886,9 +1940,9 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Auto-Cached Recent Hearing Table */}
+                {/* Auto-Cached Recent Hearing List (Mobile Card List + Desktop Table) */}
                 {autoCachedSongs.length === 0 ? (
-                  <div className="rounded-xl border border-slate-800/80 bg-slate-900/30 p-10 text-center space-y-3">
+                  <div className="rounded-xl border border-slate-800/80 bg-slate-900/30 p-8 sm:p-10 text-center space-y-3">
                     <p className="text-sm text-slate-300">
                       No recent hearing songs cached yet.
                     </p>
@@ -1898,125 +1952,221 @@ export default function App() {
                     </p>
                   </div>
                 ) : (
-                  <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-900/30">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-slate-800/80 text-[11px] font-medium text-slate-400">
-                          <th className="py-3 px-4">Recently Heard Song</th>
-                          <th className="py-3 px-4">Mood Context</th>
-                          <th className="py-3 px-4 text-right">Plays</th>
-                          <th className="py-3 px-4 text-right">Cached Size</th>
-                          <th className="py-3 px-4 text-right">Last Heard</th>
-                          <th className="py-3 px-4 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/60 text-sm">
-                        {autoCachedSongs.map((cached) => {
-                          const inLib = cached.videoId
-                            ? isYtTrackInLibrary(cached.videoId)
-                            : false;
-                          return (
-                            <tr
-                              key={cached.id}
-                              className="hover:bg-slate-900/60 transition-colors"
-                            >
-                              <td className="py-3 px-4">
-                                <div className="flex items-center gap-3">
-                                  {cached.thumbnailUrl ? (
-                                    <img
-                                      src={cached.thumbnailUrl}
-                                      alt={cached.title}
-                                      referrerPolicy="no-referrer"
-                                      className="w-10 h-10 rounded-md object-cover shrink-0"
-                                    />
-                                  ) : (
-                                    <div className="w-10 h-10 rounded-md bg-slate-800 flex items-center justify-center shrink-0">
-                                      <HardDrive className="w-4 h-4 text-emerald-400" />
-                                    </div>
-                                  )}
-                                  <div className="min-w-0">
-                                    <p className="font-semibold text-white truncate max-w-xs">
-                                      {cached.title}
-                                    </p>
-                                    <p className="text-xs text-slate-400 truncate">
-                                      {cached.artist} · {cached.genre}
-                                    </p>
-                                  </div>
+                  <>
+                    {/* Mobile Card List (< md) */}
+                    <div className="md:hidden space-y-3">
+                      {autoCachedSongs.map((cached) => {
+                        const inLib = cached.videoId
+                          ? isYtTrackInLibrary(cached.videoId)
+                          : false;
+                        return (
+                          <div
+                            key={`mob-cache-${cached.id}`}
+                            className="rounded-xl border border-slate-800/80 bg-slate-900/40 p-3.5 space-y-3"
+                          >
+                            <div className="flex items-center gap-3">
+                              {cached.thumbnailUrl ? (
+                                <img
+                                  src={cached.thumbnailUrl}
+                                  alt={cached.title}
+                                  referrerPolicy="no-referrer"
+                                  className="w-12 h-12 rounded-lg object-cover shrink-0"
+                                />
+                              ) : (
+                                <div className="w-12 h-12 rounded-lg bg-slate-800 flex items-center justify-center shrink-0">
+                                  <HardDrive className="w-4 h-4 text-emerald-400" />
                                 </div>
-                              </td>
-                              <td className="py-3 px-4 text-xs text-slate-300">
-                                {cached.moodAtPlay}
-                              </td>
-                              <td className="py-3 px-4 text-right font-mono-tabular text-xs text-emerald-400">
-                                {cached.playCount}x
-                              </td>
-                              <td className="py-3 px-4 text-right font-mono-tabular text-xs text-slate-300">
-                                {(cached.cacheSizeKb / 1024).toFixed(2)} MB
-                              </td>
-                              <td className="py-3 px-4 text-right font-mono-tabular text-xs text-slate-400">
-                                {new Date(cached.lastHeardAt).toLocaleTimeString(
-                                  [],
-                                  {
-                                    hour: '2-digit',
-                                    minute: '2-digit',
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold text-white truncate">
+                                  {cached.title}
+                                </p>
+                                <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                                  {cached.artist} · {cached.moodAtPlay}
+                                </p>
+                                <p className="text-[11px] font-mono-tabular text-emerald-400 mt-0.5">
+                                  Heard {cached.playCount}x ·{' '}
+                                  {(cached.cacheSizeKb / 1024).toFixed(2)} MB
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between pt-2.5 border-t border-slate-800/70 gap-2">
+                              {!inLib ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const newLibItem: LibrarySongItem = {
+                                      id: `lib-promoted-${cached.id}`,
+                                      videoId: cached.videoId,
+                                      title: cached.title,
+                                      artist: cached.artist,
+                                      genre: cached.genre,
+                                      thumbnailUrl: cached.thumbnailUrl,
+                                      addedAt: new Date().toISOString(),
+                                      source: 'youtube-music',
+                                    };
+                                    setSavedLibrarySongs((prev) => [
+                                      newLibItem,
+                                      ...prev,
+                                    ]);
+                                  }}
+                                  className="px-2.5 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 rounded-md"
+                                >
+                                  + Save to Library
+                                </button>
+                              ) : (
+                                <span className="text-xs text-emerald-400">
+                                  Saved in Library
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (cached.videoId) {
+                                    handlePlayYouTubeTrack({
+                                      videoId: cached.videoId,
+                                      title: cached.title,
+                                      channelTitle: cached.artist,
+                                      thumbnailUrl: cached.thumbnailUrl,
+                                      publishedAt: cached.lastHeardAt,
+                                      sourceType: 'recommended',
+                                      matchReason:
+                                        'Instant Replay from Auto-Cache',
+                                      matchScore: 99,
+                                    });
                                   }
-                                )}
-                              </td>
-                              <td className="py-3 px-4 text-right">
-                                <div className="flex items-center justify-end gap-2">
-                                  {!inLib && (
+                                }}
+                                className="px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md"
+                              >
+                                Instant Play
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Desktop Table (md+) */}
+                    <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-900/30">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-800/80 text-[11px] font-medium text-slate-400">
+                            <th className="py-3 px-4">Recently Heard Song</th>
+                            <th className="py-3 px-4">Mood Context</th>
+                            <th className="py-3 px-4 text-right">Plays</th>
+                            <th className="py-3 px-4 text-right">Cached Size</th>
+                            <th className="py-3 px-4 text-right">Last Heard</th>
+                            <th className="py-3 px-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 text-sm">
+                          {autoCachedSongs.map((cached) => {
+                            const inLib = cached.videoId
+                              ? isYtTrackInLibrary(cached.videoId)
+                              : false;
+                            return (
+                              <tr
+                                key={cached.id}
+                                className="hover:bg-slate-900/60 transition-colors"
+                              >
+                                <td className="py-3 px-4">
+                                  <div className="flex items-center gap-3">
+                                    {cached.thumbnailUrl ? (
+                                      <img
+                                        src={cached.thumbnailUrl}
+                                        alt={cached.title}
+                                        referrerPolicy="no-referrer"
+                                        className="w-10 h-10 rounded-md object-cover shrink-0"
+                                      />
+                                    ) : (
+                                      <div className="w-10 h-10 rounded-md bg-slate-800 flex items-center justify-center shrink-0">
+                                        <HardDrive className="w-4 h-4 text-emerald-400" />
+                                      </div>
+                                    )}
+                                    <div className="min-w-0">
+                                      <p className="font-semibold text-white truncate max-w-xs">
+                                        {cached.title}
+                                      </p>
+                                      <p className="text-xs text-slate-400 truncate">
+                                        {cached.artist} · {cached.genre}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 text-xs text-slate-300">
+                                  {cached.moodAtPlay}
+                                </td>
+                                <td className="py-3 px-4 text-right font-mono-tabular text-xs text-emerald-400">
+                                  {cached.playCount}x
+                                </td>
+                                <td className="py-3 px-4 text-right font-mono-tabular text-xs text-slate-300">
+                                  {(cached.cacheSizeKb / 1024).toFixed(2)} MB
+                                </td>
+                                <td className="py-3 px-4 text-right font-mono-tabular text-xs text-slate-400">
+                                  {new Date(cached.lastHeardAt).toLocaleTimeString(
+                                    [],
+                                    {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    }
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 text-right">
+                                  <div className="flex items-center justify-end gap-2">
+                                    {!inLib && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const newLibItem: LibrarySongItem = {
+                                            id: `lib-promoted-${cached.id}`,
+                                            videoId: cached.videoId,
+                                            title: cached.title,
+                                            artist: cached.artist,
+                                            genre: cached.genre,
+                                            thumbnailUrl: cached.thumbnailUrl,
+                                            addedAt: new Date().toISOString(),
+                                            source: 'youtube-music',
+                                          };
+                                          setSavedLibrarySongs((prev) => [
+                                            newLibItem,
+                                            ...prev,
+                                          ]);
+                                        }}
+                                        className="px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 rounded-md"
+                                      >
+                                        + Save to Library
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        const newLibItem: LibrarySongItem = {
-                                          id: `lib-promoted-${cached.id}`,
-                                          videoId: cached.videoId,
-                                          title: cached.title,
-                                          artist: cached.artist,
-                                          genre: cached.genre,
-                                          thumbnailUrl: cached.thumbnailUrl,
-                                          addedAt: new Date().toISOString(),
-                                          source: 'youtube-music',
-                                        };
-                                        setSavedLibrarySongs((prev) => [
-                                          newLibItem,
-                                          ...prev,
-                                        ]);
+                                        if (cached.videoId) {
+                                          handlePlayYouTubeTrack({
+                                            videoId: cached.videoId,
+                                            title: cached.title,
+                                            channelTitle: cached.artist,
+                                            thumbnailUrl: cached.thumbnailUrl,
+                                            publishedAt: cached.lastHeardAt,
+                                            sourceType: 'recommended',
+                                            matchReason:
+                                              'Instant Replay from Auto-Cache',
+                                            matchScore: 99,
+                                          });
+                                        }
                                       }}
-                                      className="px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 rounded-md"
+                                      className="px-3 py-1 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md"
                                     >
-                                      + Save to Library
+                                      Instant Play
                                     </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (cached.videoId) {
-                                        handlePlayYouTubeTrack({
-                                          videoId: cached.videoId,
-                                          title: cached.title,
-                                          channelTitle: cached.artist,
-                                          thumbnailUrl: cached.thumbnailUrl,
-                                          publishedAt: cached.lastHeardAt,
-                                          sourceType: 'recommended',
-                                          matchReason:
-                                            'Instant Replay from Auto-Cache',
-                                          matchScore: 99,
-                                        });
-                                      }
-                                    }}
-                                    className="px-3 py-1 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md"
-                                  >
-                                    Instant Play
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
               </section>
             )}
@@ -2584,6 +2734,15 @@ export default function App() {
           });
         }}
         onCancel={() => setPlaylistPendingDelete(null)}
+      />
+
+      {/* Android PWA Installation & QR Code Modal */}
+      <AndroidInstallModal
+        isOpen={isAndroidModalOpen}
+        onClose={() => setIsAndroidModalOpen(false)}
+        isInstallable={isInstallable}
+        isInstalled={isInstalled}
+        onPromptInstall={promptInstall}
       />
 
       {/* Bottom Audio Playback Bar (Controls hidden YouTube Music stream directly, no video popup) */}

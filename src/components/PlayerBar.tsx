@@ -76,8 +76,109 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   if (!currentTrack) return null;
 
   return (
-    <footer className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-800/90 bg-slate-950/95 backdrop-blur-md px-6 py-3">
-      <div className="mx-auto max-w-[1400px] grid grid-cols-1 md:grid-cols-12 items-center gap-4">
+    <footer className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-800/90 bg-slate-950/95 backdrop-blur-md px-3.5 py-2 sm:px-6 sm:py-3">
+      {/* MOBILE MINI-PLAYER (< md) optimized for 6.2-inch Android screens */}
+      <div className="md:hidden space-y-1.5">
+        {/* Compact Scrubber Row */}
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono-tabular text-slate-400 w-8">
+            {formatTimecode(currentTime)}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={duration > 0 ? duration : 240}
+            step={1}
+            value={currentTime}
+            onChange={(e) => onSeek(parseFloat(e.target.value))}
+            aria-label="Seek timeline"
+            className="mood-slider flex-1"
+          />
+          <span className="text-[10px] font-mono-tabular text-slate-400 w-8 text-right">
+            {duration > 0 ? formatTimecode(duration) : 'LIVE'}
+          </span>
+        </div>
+
+        {/* Main Track Info + Transport Row */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            {currentTrack.thumbnailUrl ? (
+              <img
+                src={currentTrack.thumbnailUrl}
+                alt={currentTrack.title}
+                referrerPolicy="no-referrer"
+                className="w-10 h-10 rounded-lg object-cover border border-slate-800 shrink-0"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0">
+                <Radio className="w-4 h-4 text-emerald-400" />
+              </div>
+            )}
+
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-slate-100 truncate">
+                {currentTrack.title}
+              </p>
+              <p className="text-[11px] text-slate-400 truncate">
+                {currentTrack.channelTitle}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => onToggleSaveLibrary(currentTrack)}
+              title={isSavedInLibrary ? 'Saved in Library' : 'Add to Library'}
+              className={`p-2 rounded-lg transition-colors ${
+                isSavedInLibrary
+                  ? 'text-emerald-400 bg-emerald-500/15'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {isSavedInLibrary ? (
+                <Check className="w-4 h-4" />
+              ) : (
+                <Heart className="w-4 h-4" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={onPrev}
+              aria-label="Previous track"
+              className="p-2 text-slate-300 hover:text-white transition-colors"
+            >
+              <SkipBack className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={onTogglePlay}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+              className="w-9 h-9 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center transition-transform active:scale-95 shadow-sm"
+            >
+              {isPlaying ? (
+                <Pause className="w-4 h-4 fill-current" />
+              ) : (
+                <Play className="w-4 h-4 fill-current ml-0.5" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={onNext}
+              aria-label="Next track"
+              className="p-2 text-slate-300 hover:text-white transition-colors"
+            >
+              <SkipForward className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* DESKTOP 12-COLUMN PLAYER (md+) */}
+      <div className="hidden md:grid mx-auto max-w-[1400px] md:grid-cols-12 items-center gap-4">
         {/* Left: Active YouTube Music Track Artwork, Title, Artist & Library/Keep Actions */}
         <div className="md:col-span-4 flex items-center gap-3.5 min-w-0">
           {currentTrack.thumbnailUrl ? (
@@ -235,3 +336,4 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
     </footer>
   );
 };
+
