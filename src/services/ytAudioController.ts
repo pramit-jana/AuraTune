@@ -145,6 +145,17 @@ class YouTubeAudioController {
               }
             }
           },
+          onError: () => {
+            // If a stream cannot be embedded/played, automatically advance to the next suggested song
+            this.isPlaying = false;
+            this.stopPolling();
+            this.emit();
+            if (this.onEndCallback) {
+              window.setTimeout(() => {
+                if (this.onEndCallback) this.onEndCallback();
+              }, 500);
+            }
+          },
         },
       });
     };
@@ -180,6 +191,14 @@ class YouTubeAudioController {
           this.duration = dur;
         }
         this.emit();
+        if (dur > 10 && cur >= dur - 0.5 && this.isPlaying) {
+          this.isPlaying = false;
+          this.stopPolling();
+          this.emit();
+          if (this.onEndCallback) {
+            this.onEndCallback();
+          }
+        }
       } catch {
         // ignore transient player read errors
       }

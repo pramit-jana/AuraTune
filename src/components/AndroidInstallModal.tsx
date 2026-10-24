@@ -7,6 +7,7 @@ import {
   ExternalLink,
   X,
   QrCode,
+  Package,
 } from 'lucide-react';
 
 interface AndroidInstallModalProps {
@@ -31,12 +32,11 @@ export const AndroidInstallModal: React.FC<AndroidInstallModalProps> = ({
 
   if (!isOpen) return null;
 
-  const appUrl =
-    typeof window !== 'undefined' && window.location.origin
-      ? window.location.origin
-      : SHARED_ANDROID_URL;
-
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&bgcolor=0f1623&color=10b981&data=${encodeURIComponent(
+    SHARED_ANDROID_URL
+  )}`;
+
+  const pwaBuilderApkUrl = `https://www.pwabuilder.com/reportcard?site=${encodeURIComponent(
     SHARED_ANDROID_URL
   )}`;
 
@@ -52,13 +52,13 @@ export const AndroidInstallModal: React.FC<AndroidInstallModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-3.5 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="android-install-title"
     >
-      <div className="w-full max-w-xl rounded-2xl bg-slate-900 border border-slate-800 p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-start justify-between gap-4">
+      <div className="w-full max-w-2xl rounded-2xl bg-slate-900 border border-slate-800 p-4 sm:p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
               <Smartphone className="w-5 h-5" />
@@ -66,13 +66,13 @@ export const AndroidInstallModal: React.FC<AndroidInstallModalProps> = ({
             <div>
               <h3
                 id="android-install-title"
-                className="text-base font-bold text-white"
+                className="text-sm sm:text-base font-bold text-white"
               >
-                Use AuraTune on Your Android Device
+                Get AuraTune Android APK & Mobile Setup
               </h3>
               <p className="text-xs text-slate-400">
-                Install as a standalone Android app (PWA) with full-screen player
-                & auto-cache
+                Download a standalone Android APK file or install directly via
+                Android Chrome WebAPK
               </p>
             </div>
           </div>
@@ -86,24 +86,88 @@ export const AndroidInstallModal: React.FC<AndroidInstallModalProps> = ({
           </button>
         </div>
 
-        {/* Direct One-Tap Install if opened directly in Android Chrome */}
+        {/* SECTION 1: GET STANDALONE .APK FILE */}
+        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-3.5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <span className="text-[11px] font-mono-tabular font-semibold text-emerald-400 uppercase tracking-wider">
+                Standalone Android Package (.APK)
+              </span>
+              <h4 className="text-sm font-bold text-white">
+                Download Signed Android .APK File or Android Studio Project
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                AuraTune includes a full Android manifest and Digital Asset
+                Links (`com.auratune.music`). Choose either option below to get
+                your `.apk` file:
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            {/* Option A: One-Click Cloud APK Packager (PWABuilder) */}
+            <div className="p-3.5 rounded-xl bg-slate-950/85 border border-slate-800 flex flex-col justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-xs font-bold text-emerald-400">
+                  Option 1 · Instant Cloud .APK (60s)
+                </p>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Opens PWABuilder pre-loaded with AuraTune. Click{' '}
+                  <strong>Package for stores &rarr; Android &rarr; Download</strong>{' '}
+                  to get a signed <code className="text-emerald-300">AuraTune.apk</code>.
+                </p>
+              </div>
+              <a
+                href={pwaBuilderApkUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors flex items-center justify-center gap-1.5"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Generate Signed .APK (PWABuilder)</span>
+              </a>
+            </div>
+
+            {/* Option B: Direct Download Android APK Source Project (.zip) */}
+            <div className="p-3.5 rounded-xl bg-slate-950/85 border border-slate-800 flex flex-col justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-xs font-bold text-emerald-400">
+                  Option 2 · Android APK Project (.ZIP)
+                </p>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Downloads the native Android WebView project (<code className="text-emerald-300">com.auratune.music</code>) with a GitHub Actions workflow that compiles <code className="text-emerald-300">app-debug.apk</code>.
+                </p>
+              </div>
+              <a
+                href="/api/android/apk-project.zip"
+                download="AuraTune-Android-APK-Project.zip"
+                className="w-full px-3.5 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors flex items-center justify-center gap-1.5"
+              >
+                <Package className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Download APK Project (.ZIP)</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 2: DIRECT ONE-TAP CHROME WEBAPK INSTALL ON ANDROID */}
         {isInstalled ? (
-          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-3">
+          <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-3">
             <Check className="w-5 h-5 text-emerald-400 shrink-0" />
             <p className="text-xs text-emerald-200">
-              AuraTune is already installed on this device and running in
-              standalone mode.
+              AuraTune is already installed on this device and running as a
+              standalone Android app.
             </p>
           </div>
         ) : isInstallable ? (
-          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="p-4 rounded-xl bg-slate-950 border border-emerald-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="space-y-1">
               <p className="text-xs font-semibold text-emerald-300">
-                Ready for Direct Android Installation
+                Option 3 · Instant Android Chrome WebAPK Install
               </p>
               <p className="text-xs text-slate-300">
-                Tap Install to add AuraTune directly to your Android Home Screen
-                and App Drawer.
+                Chrome on Android automatically compiles and installs a real
+                signed WebAPK onto your phone when you tap Install below:
               </p>
             </div>
             <button
@@ -112,34 +176,30 @@ export const AndroidInstallModal: React.FC<AndroidInstallModalProps> = ({
               className="px-4 py-2.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition-colors flex items-center justify-center gap-2 shrink-0"
             >
               <Download className="w-4 h-4" />
-              <span>Install Android App</span>
+              <span>Install WebAPK Now</span>
             </button>
           </div>
         ) : null}
 
-        {/* QR Code + Share Link for opening on Android Phone */}
-        <div className="grid grid-cols-1 sm:grid-cols-12 gap-5 items-center p-4 rounded-xl bg-slate-950/80 border border-slate-800/90">
+        {/* SECTION 3: QR CODE & URL FOR ANDROID PHONE */}
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center p-4 rounded-xl bg-slate-950/80 border border-slate-800/90">
           <div className="sm:col-span-4 flex flex-col items-center justify-center space-y-2">
-            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+            <div className="p-2 rounded-xl bg-slate-900 border border-slate-800">
               <img
                 src={qrCodeUrl}
                 alt="Scan QR code with your Android phone"
-                className="w-32 h-32 rounded-lg"
+                className="w-28 h-28 rounded-lg"
               />
             </div>
             <span className="text-[11px] text-slate-400 flex items-center gap-1">
               <QrCode className="w-3 h-3 text-emerald-400" />
-              <span>Scan with Android Camera</span>
+              <span>Scan on Android</span>
             </span>
           </div>
 
-          <div className="sm:col-span-8 space-y-3">
+          <div className="sm:col-span-8 space-y-2.5">
             <p className="text-xs font-semibold text-white">
-              Step 1: Open this link in Chrome on your Android phone
-            </p>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Scan the QR code with your phone camera or copy the direct app URL
-              below and open it in <strong>Google Chrome</strong> on Android:
+              Direct Android App URL (Copy for PWABuilder or Chrome on Android)
             </p>
             <div className="flex items-center gap-2">
               <input
@@ -161,66 +221,28 @@ export const AndroidInstallModal: React.FC<AndroidInstallModalProps> = ({
                 ) : (
                   <>
                     <Copy className="w-3.5 h-3.5" />
-                    <span>Copy URL</span>
+                    <span>Copy</span>
                   </>
                 )}
               </button>
             </div>
-            {appUrl !== SHARED_ANDROID_URL && (
-              <p className="text-[11px] text-slate-400">
-                Note: Make sure your app sharing is enabled in AI Studio if
-                signing in from a different Google account.
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Step-by-Step Android Chrome Install Guide */}
-        <div className="space-y-3">
-          <p className="text-xs font-semibold text-white">
-            Step 2: Install to your Android Home Screen
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-1.5">
-              <span className="text-xs font-mono-tabular font-semibold text-emerald-400">
-                01 · Open in Chrome
-              </span>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Open the link in <strong>Chrome for Android</strong> and sign in
-                with your Google account.
-              </p>
-            </div>
-            <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-1.5">
-              <span className="text-xs font-mono-tabular font-semibold text-emerald-400">
-                02 · Tap Menu (⋮)
-              </span>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Tap the <strong>Install App</strong> banner inside AuraTune, or
-                tap Chrome&apos;s top-right <strong>⋮ menu</strong>.
-              </p>
-            </div>
-            <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-1.5">
-              <span className="text-xs font-mono-tabular font-semibold text-emerald-400">
-                03 · Add to Home Screen
-              </span>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Select <strong>&ldquo;Add to Home screen&rdquo;</strong> or{' '}
-                <strong>&ldquo;Install app&rdquo;</strong> to launch AuraTune
-                like a native Android app.
-              </p>
-            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              In Chrome on Android, you can also tap the top-right{' '}
+              <strong>⋮ menu &rarr; Install app</strong> so Google Chrome
+              generates and installs the native WebAPK directly on your 6.2&quot;
+              Android device.
+            </p>
           </div>
         </div>
 
         <div className="flex items-center justify-between pt-2 border-t border-slate-800">
           <a
-            href={SHARED_ANDROID_URL}
-            target="_blank"
-            rel="noopener noreferrer"
+            href="/api/android/apk-project.zip"
+            download="AuraTune-Android-APK-Project.zip"
             className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1.5 font-medium"
           >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span>Open Full-Screen App Tab</span>
+            <Download className="w-3.5 h-3.5" />
+            <span>Download Android Studio APK Zip</span>
           </a>
           <button
             type="button"

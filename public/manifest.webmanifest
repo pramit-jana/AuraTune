@@ -1,13 +1,16 @@
 {
+  "id": "/",
   "name": "AuraTune — Personalized Music & Mood Discovery",
   "short_name": "AuraTune",
-  "description": "Online music listening and personalized YouTube Music discovery platform powered by your listening history and mood preferences.",
+  "description": "Online music listening and personalized music discovery platform powered by your listening history and mood preferences.",
   "theme_color": "#090d16",
   "background_color": "#090d16",
   "display": "standalone",
   "orientation": "portrait",
   "scope": "/",
   "start_url": "/",
+  "categories": ["music", "entertainment"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/pwa-192x192.png",
@@ -26,6 +29,22 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshot-mobile.png",
+      "sizes": "540x960",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "AuraTune Mobile Music Player on Android"
+    },
+    {
+      "src": "/screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "AuraTune Personalized Music Discovery"
     }
   ]
 }

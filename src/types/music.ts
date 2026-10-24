@@ -42,6 +42,7 @@ export interface YouTubeMusicTrack {
   matchReason: string;
   matchScore: number;
   categoryTag?: string;
+  durationSec?: number;
 }
 
 export interface SearchCategoryCard {
@@ -64,6 +65,7 @@ export interface LibrarySongItem {
   thumbnailUrl: string;
   addedAt: string;
   source: 'youtube-music' | 'studio';
+  durationSec?: number;
 }
 
 export interface AutoCachedSongItem {
@@ -79,6 +81,7 @@ export interface AutoCachedSongItem {
   cacheSizeKb: number;
   moodAtPlay: string;
   source: 'youtube-music' | 'studio';
+  durationSec?: number;
 }
 
 export interface CustomPlaylist {
@@ -109,6 +112,7 @@ export interface ListeningHistoryEntry {
   moodTag: string;
   listenedAt: string; // ISO timestamp
   listenedSeconds: number;
+  durationSec?: number;
   source?: 'studio' | 'youtube-music';
   youtubeVideoId?: string;
   thumbnailUrl?: string;
@@ -151,3 +155,64 @@ export interface KeepNoteItem {
   linkedTrackTitle?: string;
   syncedWithCloud: boolean;
 }
+
+export type TimeOfDaySlot = 'morning' | 'afternoon' | 'evening' | 'late-night';
+
+export type ListeningSignalType =
+  | 'play_start'
+  | 'deep_listen'
+  | 'early_skip'
+  | 'replay'
+  | 'save_library'
+  | 'add_playlist'
+  | 'search_intent'
+  | 'explicit_like'
+  | 'explicit_dislike';
+
+export interface LearnedFeatureWeight {
+  name: string;
+  score: number; // positive = affinity, negative = avoidance
+  interactions: number;
+  lastUpdated: string;
+}
+
+export interface TimeOfDayPattern {
+  slot: TimeOfDaySlot;
+  topGenre: string;
+  avgEnergy: number;
+  avgValence: number;
+  avgFocus: number;
+  sessionCount: number;
+}
+
+export interface LearnedListeningProfile {
+  version: number;
+  totalInteractions: number;
+  deepListenCount: number;
+  skipCount: number;
+  replayCount: number;
+  avgListenSeconds: number;
+  explorationRate: number; // 0.1 (strict taste) to 0.5 (high discovery)
+  learnedMoodVector: {
+    energy: number;
+    valence: number;
+    focus: number;
+    tempo: number;
+  };
+  genreWeights: Record<string, LearnedFeatureWeight>;
+  artistWeights: Record<string, LearnedFeatureWeight>;
+  keywordWeights: Record<string, LearnedFeatureWeight>;
+  dislikedVideoIds: string[];
+  likedVideoIds: string[];
+  timeOfDayPatterns: Record<TimeOfDaySlot, TimeOfDayPattern>;
+  recentSignals: Array<{
+    id: string;
+    type: ListeningSignalType;
+    trackTitle: string;
+    artist: string;
+    genre: string;
+    deltaScore: number;
+    timestamp: string;
+  }>;
+}
+

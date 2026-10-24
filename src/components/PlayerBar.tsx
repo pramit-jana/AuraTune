@@ -201,7 +201,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             <div className="flex items-center gap-1.5 text-xs text-slate-400 truncate mt-0.5">
               <span className="truncate">{currentTrack.channelTitle}</span>
               <span aria-hidden="true">·</span>
-              <span className="text-emerald-400">YouTube Music Audio</span>
+              <span className="text-emerald-400">Hi-Fi Audio Stream</span>
             </div>
           </div>
 

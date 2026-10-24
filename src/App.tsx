@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
   Play,
   Pause,
@@ -24,6 +24,8 @@ import {
   X,
   Smartphone,
   Download,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import {
@@ -35,6 +37,8 @@ import {
   LibrarySongItem,
   AutoCachedSongItem,
   CustomPlaylist,
+  LearnedListeningProfile,
+  ListeningSignalType,
 } from './types/music';
 import { MOOD_PRESETS, INITIAL_KEEP_NOTES } from './data/catalog';
 import { DEFAULT_SEARCH_CATEGORIES } from './data/searchCategories';
@@ -45,7 +49,19 @@ import {
   createGoogleKeepNote,
   deleteGoogleKeepNote,
 } from './services/keepService';
-import { fetchPersonalizedYouTubeMusic } from './services/youtubeMusicService';
+import {
+  fetchPersonalizedYouTubeMusic,
+  fetchNextSuggestedSongsForTrack,
+} from './services/youtubeMusicService';
+import {
+  loadLearnedProfile,
+  saveLearnedProfile,
+  recordListeningSignal,
+  scoreAndRankTracks,
+  hasSongBeenPlayedBefore,
+  filterOutPlayedAndDuplicateTracks,
+  PlayedSongSignature,
+} from './services/listeningPatternLearner';
 import { PlayerBar } from './components/PlayerBar';
 import { ConfirmModal } from './components/ConfirmModal';
 import { usePWAInstall } from './hooks/usePWAInstall';
@@ -61,6 +77,7 @@ const STORAGE_KEYS = {
   AUTO_CACHE: 'auratune_yt_autocache_recent_v2',
   AUTO_CACHE_ENABLED: 'auratune_autocache_enabled_v2',
   PLAYLISTS: 'auratune_yt_playlists_v2',
+  LISTENING_HISTORY: 'auratune_yt_listening_history_v2',
 };
 
 const CARD_COLOR_OPTIONS = [
@@ -111,11 +128,34 @@ export default function App() {
   const [duration, setDuration] = useState(0);
   const [isRepeat, setIsRepeat] = useState(false);
 
-  // Mood & Listening History State (No demo tracks)
+  // Mood & Listening History State + Learning-Based Recommendation Profile
   const [moodProfile, setMoodProfile] = useState<MoodProfile>(MOOD_PRESETS[0]);
   const [listeningHistory, setListeningHistory] = useState<
     ListeningHistoryEntry[]
-  >([]);
+  >(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.LISTENING_HISTORY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [learnedProfile, setLearnedProfile] = useState<LearnedListeningProfile>(
+    () => loadLearnedProfile()
+  );
+
+  // Track active listening session duration for automatic deep-listen vs early-skip detection
+  const playSessionRef = useRef<{
+    track: YouTubeMusicTrack | null;
+    startedAtMs: number;
+    maxPositionSec: number;
+    deepListenRecorded: boolean;
+  }>({
+    track: null,
+    startedAtMs: 0,
+    maxPositionSec: 0,
+    deepListenRecorded: false,
+  });
 
   // Google Auth State
   const [user, setUser] = useState<User | null>(null);
@@ -205,7 +245,7 @@ export default function App() {
         {
           id: 'pl-default-1',
           name: 'My Favorites Mix',
-          description: 'Personal YouTube Music playlist',
+          description: 'Personal curated music playlist',
           moodTag: 'Deep Focus & Flow',
           accentColor: '#10b981',
           createdAt: new Date().toISOString(),
@@ -249,7 +289,7 @@ export default function App() {
   const [playlistPendingDelete, setPlaylistPendingDelete] =
     useState<CustomPlaylist | null>(null);
 
-  // Persist user customizations & library/cache to localStorage
+  // Persist user customizations & library/cache/history to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -286,6 +326,17 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem(
+        STORAGE_KEYS.LISTENING_HISTORY,
+        JSON.stringify(listeningHistory)
+      );
+    } catch {
+      // ignore
+    }
+  }, [listeningHistory]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
         STORAGE_KEYS.AUTO_CACHE_ENABLED,
         JSON.stringify(autoCacheEnabled)
       );
@@ -302,12 +353,72 @@ export default function App() {
     }
   }, [playlists]);
 
+  useEffect(() => {
+    saveLearnedProfile(learnedProfile);
+  }, [learnedProfile]);
+
   const activeKeepNote = useMemo(
     () => keepNotes.find((n) => n.id === activeKeepNoteId) || null,
     [keepNotes, activeKeepNoteId]
   );
 
-  // Auto-Cache helper: automatically caches any YouTube Music song the user hears
+  // Comprehensive list of all previously played songs (matched by videoId, song title, artist name, or duration)
+  const playedSongSignatures = useMemo<PlayedSongSignature[]>(() => {
+    const signatures: PlayedSongSignature[] = [];
+    if (currentTrack) {
+      signatures.push({
+        videoId: currentTrack.videoId,
+        title: currentTrack.title,
+        artist: currentTrack.channelTitle,
+        durationSec: currentTrack.durationSec || (duration > 0 ? Math.round(duration) : undefined),
+      });
+    }
+    for (const h of listeningHistory) {
+      signatures.push({
+        videoId: h.youtubeVideoId || h.trackId,
+        title: h.title,
+        artist: h.artist,
+        durationSec: h.durationSec,
+      });
+    }
+    for (const c of autoCachedSongs) {
+      signatures.push({
+        videoId: c.videoId,
+        title: c.title,
+        artist: c.artist,
+        durationSec: c.durationSec,
+      });
+    }
+    return signatures;
+  }, [currentTrack, duration, listeningHistory, autoCachedSongs]);
+
+  // Helper to apply a behavioral signal to the learned listening pattern and immediately re-rank visible recommendations
+  const trainListeningPattern = useCallback(
+    (params: {
+      type: ListeningSignalType;
+      track?: YouTubeMusicTrack;
+      customGenre?: string;
+      customQuery?: string;
+      listenedSeconds?: number;
+    }) => {
+      setLearnedProfile((prev) => {
+        const updated = recordListeningSignal(prev, {
+          ...params,
+          mood: moodProfile,
+        });
+        setYtRecommendedTracks((curr) =>
+          scoreAndRankTracks(curr, updated, moodProfile)
+        );
+        setYtLikedSeedTracks((curr) =>
+          scoreAndRankTracks(curr, updated, moodProfile)
+        );
+        return updated;
+      });
+    },
+    [moodProfile]
+  );
+
+  // Auto-Cache helper: automatically caches any song the user hears (including its durationSec)
   const recordSongInAutoCache = useCallback(
     (ytTrack: YouTubeMusicTrack) => {
       if (!autoCacheEnabled) return;
@@ -318,6 +429,7 @@ export default function App() {
         if (existing) {
           const updated: AutoCachedSongItem = {
             ...existing,
+            durationSec: ytTrack.durationSec || existing.durationSec,
             lastHeardAt: new Date().toISOString(),
             playCount: existing.playCount + 1,
             moodAtPlay: moodProfile.presetName,
@@ -333,8 +445,9 @@ export default function App() {
           videoId: ytTrack.videoId,
           title: ytTrack.title,
           artist: ytTrack.channelTitle,
-          genre: ytTrack.categoryTag || 'YouTube Music',
+          genre: ytTrack.categoryTag || 'AuraTune Stream',
           thumbnailUrl: ytTrack.thumbnailUrl,
+          durationSec: ytTrack.durationSec,
           lastHeardAt: new Date().toISOString(),
           playCount: 1,
           cacheSizeKb: 2800 + Math.floor(Math.random() * 1400),
@@ -347,33 +460,96 @@ export default function App() {
     [autoCacheEnabled, autoCacheLimit, moodProfile.presetName]
   );
 
-  // Fetch Recommended YouTube Music for Home Section based on Listening & Mood
-  const syncHomeYouTubeRecommendations = useCallback(async () => {
-    setIsLoadingYouTube(true);
-    try {
-      const res = await fetchPersonalizedYouTubeMusic(
-        moodProfile,
-        listeningHistory,
-        activeKeepNote
-      );
-      setYtRecommendedTracks(res.recommendedTracks);
-      setYtLikedSeedTracks(res.likedTracks);
-      setYtActiveQueryUsed(res.queryUsed);
-      if (!currentTrack && res.recommendedTracks.length > 0) {
-        setCurrentTrack(res.recommendedTracks[0]);
-        ytAudioController.cueTrack(res.recommendedTracks[0]);
+  // Fetch Recommended Music for Home Section based on Learned Listening Pattern & Current Song
+  const syncHomeYouTubeRecommendations = useCallback(
+    async (
+      overrideProfile?: LearnedListeningProfile,
+      activeSong?: YouTubeMusicTrack | null
+    ) => {
+      setIsLoadingYouTube(true);
+      try {
+        const profileToUse = overrideProfile || learnedProfile;
+        const songToUse = activeSong !== undefined ? activeSong : currentTrack;
+        const res = await fetchPersonalizedYouTubeMusic(
+          moodProfile,
+          listeningHistory,
+          activeKeepNote,
+          undefined,
+          profileToUse,
+          songToUse,
+          playedSongSignatures
+        );
+        setYtRecommendedTracks(res.recommendedTracks);
+        if (res.likedTracks.length > 0) {
+          setYtLikedSeedTracks(res.likedTracks);
+        }
+        setYtActiveQueryUsed(res.queryUsed);
+        if (!songToUse && res.recommendedTracks.length > 0) {
+          const firstTrack = res.recommendedTracks[0];
+          setCurrentTrack(firstTrack);
+          ytAudioController.cueTrack(firstTrack);
+        }
+      } catch {
+        // ignore transient errors
+      } finally {
+        setIsLoadingYouTube(false);
       }
-    } catch {
-      // ignore transient errors
-    } finally {
-      setIsLoadingYouTube(false);
-    }
-  }, [moodProfile, listeningHistory, activeKeepNote, currentTrack]);
+    },
+    [
+      moodProfile,
+      listeningHistory,
+      activeKeepNote,
+      currentTrack,
+      learnedProfile,
+      playedSongSignatures,
+    ]
+  );
 
-  // Load Home YouTube Music recommendations on initial mount and when mood preset changes
+  // Refresh Next Suggested Songs specifically whenever the user's current listening song changes
   useEffect(() => {
-    syncHomeYouTubeRecommendations();
-  }, [moodProfile.presetName]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!currentTrack?.videoId) return;
+    let cancelled = false;
+    const recentIds = listeningHistory
+      .map((h) => h.youtubeVideoId || h.trackId)
+      .filter(Boolean) as string[];
+
+    fetchNextSuggestedSongsForTrack(
+      currentTrack,
+      moodProfile,
+      listeningHistory,
+      learnedProfile,
+      recentIds,
+      playedSongSignatures
+    )
+      .then((nextSuggestions) => {
+        if (!cancelled && nextSuggestions.length > 0) {
+          setYtLikedSeedTracks(nextSuggestions);
+        }
+      })
+      .catch(() => {
+        // ignore transient errors
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.videoId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Automatically sync Home recommendations whenever mood profile, learned listening pattern, or active note changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      syncHomeYouTubeRecommendations(learnedProfile, currentTrack);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [
+    moodProfile.presetName,
+    moodProfile.energy,
+    moodProfile.valence,
+    moodProfile.focus,
+    activeKeepNoteId,
+    learnedProfile.totalInteractions,
+    learnedProfile.explorationRate,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Initialize Firebase Auth listener
   useEffect(() => {
@@ -390,17 +566,62 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Subscribe to Hidden YouTube Audio Controller updates
+  // Subscribe to Hidden Audio Controller updates, capture actual song durationSec, and detect Deep Listens (>= 25s)
   useEffect(() => {
     const unsub = ytAudioController.subscribe((state) => {
       setIsPlaying(state.isPlaying);
       setCurrentTime(state.currentTime);
       setDuration(state.duration);
+
+      const session = playSessionRef.current;
+      if (session.track && state.duration > 0) {
+        const roundedDur = Math.round(state.duration);
+        if (!session.track.durationSec) {
+          session.track.durationSec = roundedDur;
+          const activeVid = session.track.videoId;
+          setCurrentTrack((prev) =>
+            prev && prev.videoId === activeVid && !prev.durationSec
+              ? { ...prev, durationSec: roundedDur }
+              : prev
+          );
+          setListeningHistory((prev) =>
+            prev.map((h) =>
+              (h.youtubeVideoId === activeVid || h.trackId === activeVid) &&
+              !h.durationSec
+                ? { ...h, durationSec: roundedDur }
+                : h
+            )
+          );
+          setAutoCachedSongs((prev) =>
+            prev.map((c) =>
+              c.videoId === activeVid && !c.durationSec
+                ? { ...c, durationSec: roundedDur }
+                : c
+            )
+          );
+        }
+      }
+
+      if (session.track && state.currentTime > session.maxPositionSec) {
+        session.maxPositionSec = state.currentTime;
+      }
+      if (
+        session.track &&
+        !session.deepListenRecorded &&
+        state.currentTime >= 25
+      ) {
+        session.deepListenRecorded = true;
+        trainListeningPattern({
+          type: 'deep_listen',
+          track: session.track,
+          listenedSeconds: Math.round(state.currentTime),
+        });
+      }
     });
     return () => unsub();
-  }, []);
+  }, [trainListeningPattern]);
 
-  // Play a YouTube Music Track in background audio (NO video popup), log to Listening History & Auto-Cache
+  // Play a Track in background audio (NO video popup), log to Listening History, Auto-Cache & Pattern Learner
   const handlePlayYouTubeTrack = useCallback(
     (ytTrack: YouTubeMusicTrack) => {
       if (currentTrack?.videoId === ytTrack.videoId) {
@@ -408,19 +629,76 @@ export default function App() {
         return;
       }
 
+      // Evaluate previous track session for Early Skip (< 20s) before switching
+      const prevSession = playSessionRef.current;
+      if (
+        prevSession.track &&
+        prevSession.track.videoId !== ytTrack.videoId &&
+        prevSession.startedAtMs > 0
+      ) {
+        const elapsedSec = Math.max(
+          prevSession.maxPositionSec,
+          (Date.now() - prevSession.startedAtMs) / 1000
+        );
+        if (elapsedSec >= 2 && elapsedSec < 20 && !prevSession.deepListenRecorded) {
+          trainListeningPattern({
+            type: 'early_skip',
+            track: prevSession.track,
+            listenedSeconds: Math.round(elapsedSec),
+          });
+        }
+      }
+
+      const wasHeardBefore = hasSongBeenPlayedBefore(
+        {
+          videoId: ytTrack.videoId,
+          title: ytTrack.title,
+          artist: ytTrack.channelTitle,
+          durationSec: ytTrack.durationSec,
+        },
+        playedSongSignatures
+      );
+
+      playSessionRef.current = {
+        track: { ...ytTrack },
+        startedAtMs: Date.now(),
+        maxPositionSec: 0,
+        deepListenRecorded: false,
+      };
+
       setCurrentTrack(ytTrack);
       ytAudioController.loadAndPlay(ytTrack);
+
+      // Immediately filter out this song (and any duplicate upload by title/artist/duration) from Next Suggested Songs
+      const newlyPlayedSig: PlayedSongSignature = {
+        videoId: ytTrack.videoId,
+        title: ytTrack.title,
+        artist: ytTrack.channelTitle,
+        durationSec: ytTrack.durationSec,
+      };
+      setYtLikedSeedTracks((prev) =>
+        filterOutPlayedAndDuplicateTracks(prev, [
+          ...playedSongSignatures,
+          newlyPlayedSig,
+        ])
+      );
+
+      trainListeningPattern({
+        type: wasHeardBefore ? 'replay' : 'play_start',
+        track: ytTrack,
+      });
 
       const entry: ListeningHistoryEntry = {
         id: `hist-yt-${Date.now()}`,
         trackId: ytTrack.videoId,
         title: ytTrack.title,
         artist: ytTrack.channelTitle,
-        genre: ytTrack.categoryTag || 'YouTube Music',
+        genre: ytTrack.categoryTag || 'AuraTune Stream',
         bpm: moodProfile.tempo,
         moodTag: moodProfile.presetName,
         listenedAt: new Date().toISOString(),
-        listenedSeconds: 210,
+        listenedSeconds: ytTrack.durationSec || 210,
+        durationSec: ytTrack.durationSec,
         source: 'youtube-music',
         youtubeVideoId: ytTrack.videoId,
         thumbnailUrl: ytTrack.thumbnailUrl,
@@ -430,32 +708,118 @@ export default function App() {
           focus: moodProfile.focus,
         },
       };
-      setListeningHistory((prev) => [entry, ...prev.slice(0, 39)]);
+      setListeningHistory((prev) => [entry, ...prev.slice(0, 79)]);
       recordSongInAutoCache(ytTrack);
     },
-    [currentTrack?.videoId, moodProfile, recordSongInAutoCache]
+    [
+      currentTrack?.videoId,
+      moodProfile,
+      recordSongInAutoCache,
+      playedSongSignatures,
+      trainListeningPattern,
+    ]
   );
 
-  // Active playback queue for Next / Previous buttons in PlayerBar
+  // Active playback queue combining Next Suggested Songs (based on currentTrack) and Recommended tracks
   const activeQueue = useMemo(() => {
-    if (activeSection === 'search' && searchResultsYt.length > 0) {
-      return searchResultsYt;
-    }
-    return [...ytRecommendedTracks, ...ytLikedSeedTracks];
+    const sources =
+      activeSection === 'search' && searchResultsYt.length > 0
+        ? [...ytLikedSeedTracks, ...searchResultsYt, ...ytRecommendedTracks]
+        : [...ytLikedSeedTracks, ...ytRecommendedTracks];
+
+    return filterOutPlayedAndDuplicateTracks(sources, []);
   }, [activeSection, searchResultsYt, ytRecommendedTracks, ytLikedSeedTracks]);
 
   const handleNextTrack = useCallback(() => {
-    if (activeQueue.length === 0) return;
-    const idx = activeQueue.findIndex(
-      (t) => t.videoId === currentTrack?.videoId
+    // Helper to check if a candidate song has ALREADY been played before by videoId, song title, artist name, or duration
+    const isAlreadyPlayed = (candidate: YouTubeMusicTrack) =>
+      hasSongBeenPlayedBefore(
+        {
+          videoId: candidate.videoId,
+          title: candidate.title,
+          artist: candidate.channelTitle,
+          durationSec: candidate.durationSec,
+        },
+        playedSongSignatures
+      );
+
+    // 1. Prioritize the top unplayed Next Suggested Song based on the user's current listening song
+    const nextFromSuggested = ytLikedSeedTracks.find(
+      (t) => !isAlreadyPlayed(t)
     );
-    const nextTrack = activeQueue[(idx + 1) % activeQueue.length];
-    if (nextTrack) {
-      handlePlayYouTubeTrack(nextTrack);
+
+    if (nextFromSuggested) {
+      handlePlayYouTubeTrack(nextFromSuggested);
+      return;
     }
-  }, [activeQueue, currentTrack?.videoId, handlePlayYouTubeTrack]);
+
+    // 2. Fallback to next unplayed track in activeQueue (checked by title, artist, and duration)
+    const unplayedInQueue = activeQueue.find((t) => !isAlreadyPlayed(t));
+    if (unplayedInQueue) {
+      handlePlayYouTubeTrack(unplayedInQueue);
+      return;
+    }
+
+    // 3. If every candidate currently in memory has been played before, fetch fresh unplayed suggestions on the fly
+    if (currentTrack) {
+      const recentIds = listeningHistory
+        .map((h) => h.youtubeVideoId || h.trackId)
+        .filter(Boolean) as string[];
+
+      fetchNextSuggestedSongsForTrack(
+        currentTrack,
+        moodProfile,
+        listeningHistory,
+        learnedProfile,
+        recentIds,
+        playedSongSignatures
+      )
+        .then((freshSuggestions) => {
+          const firstUnplayed = freshSuggestions.find(
+            (t) => !isAlreadyPlayed(t)
+          );
+          if (firstUnplayed) {
+            setYtLikedSeedTracks(freshSuggestions.slice(1));
+            handlePlayYouTubeTrack(firstUnplayed);
+          }
+        })
+        .catch(() => {
+          // ignore transient errors
+        });
+    }
+  }, [
+    ytLikedSeedTracks,
+    activeQueue,
+    playedSongSignatures,
+    currentTrack,
+    moodProfile,
+    listeningHistory,
+    learnedProfile,
+    handlePlayYouTubeTrack,
+  ]);
 
   const handlePrevTrack = useCallback(() => {
+    // Step back to the previous track in Listening History if available
+    const prevHistoryEntry = listeningHistory.find(
+      (h) =>
+        (h.youtubeVideoId || h.trackId) &&
+        (h.youtubeVideoId || h.trackId) !== currentTrack?.videoId
+    );
+    if (prevHistoryEntry && prevHistoryEntry.youtubeVideoId) {
+      handlePlayYouTubeTrack({
+        videoId: prevHistoryEntry.youtubeVideoId,
+        title: prevHistoryEntry.title,
+        channelTitle: prevHistoryEntry.artist,
+        thumbnailUrl: prevHistoryEntry.thumbnailUrl || '',
+        publishedAt: prevHistoryEntry.listenedAt,
+        sourceType: 'recommended',
+        matchReason: 'Previous Track',
+        matchScore: 96,
+        categoryTag: prevHistoryEntry.genre,
+      });
+      return;
+    }
+
     if (activeQueue.length === 0) return;
     const idx = activeQueue.findIndex(
       (t) => t.videoId === currentTrack?.videoId
@@ -465,17 +829,22 @@ export default function App() {
     if (prevTrack) {
       handlePlayYouTubeTrack(prevTrack);
     }
-  }, [activeQueue, currentTrack?.videoId, handlePlayYouTubeTrack]);
+  }, [listeningHistory, activeQueue, currentTrack?.videoId, handlePlayYouTubeTrack]);
 
   useEffect(() => {
     ytAudioController.onTrackEnd(() => {
       if (isRepeat && currentTrack) {
+        trainListeningPattern({
+          type: 'replay',
+          track: currentTrack,
+          listenedSeconds: duration || 210,
+        });
         ytAudioController.loadAndPlay(currentTrack);
       } else {
         handleNextTrack();
       }
     });
-  }, [isRepeat, currentTrack, handleNextTrack]);
+  }, [isRepeat, currentTrack, duration, handleNextTrack, trainListeningPattern]);
 
   // Library Helpers: Add / Remove Song to Library
   const isYtTrackInLibrary = useCallback(
@@ -483,25 +852,35 @@ export default function App() {
     [savedLibrarySongs]
   );
 
-  const handleToggleYtLibrary = useCallback((yt: YouTubeMusicTrack) => {
-    setSavedLibrarySongs((prev) => {
-      const exists = prev.some((s) => s.videoId === yt.videoId);
-      if (exists) {
-        return prev.filter((s) => s.videoId !== yt.videoId);
+  const handleToggleYtLibrary = useCallback(
+    (yt: YouTubeMusicTrack) => {
+      const exists = savedLibrarySongs.some((s) => s.videoId === yt.videoId);
+      if (!exists) {
+        trainListeningPattern({
+          type: 'save_library',
+          track: yt,
+        });
       }
-      const newItem: LibrarySongItem = {
-        id: `lib-yt-${yt.videoId}`,
-        videoId: yt.videoId,
-        title: yt.title,
-        artist: yt.channelTitle,
-        genre: yt.categoryTag || 'YouTube Music',
-        thumbnailUrl: yt.thumbnailUrl,
-        addedAt: new Date().toISOString(),
-        source: 'youtube-music',
-      };
-      return [newItem, ...prev];
-    });
-  }, []);
+      setSavedLibrarySongs((prev) => {
+        const already = prev.some((s) => s.videoId === yt.videoId);
+        if (already) {
+          return prev.filter((s) => s.videoId !== yt.videoId);
+        }
+        const newItem: LibrarySongItem = {
+          id: `lib-yt-${yt.videoId}`,
+          videoId: yt.videoId,
+          title: yt.title,
+          artist: yt.channelTitle,
+          genre: yt.categoryTag || 'AuraTune Stream',
+          thumbnailUrl: yt.thumbnailUrl,
+          addedAt: new Date().toISOString(),
+          source: 'youtube-music',
+        };
+        return [newItem, ...prev];
+      });
+    },
+    [savedLibrarySongs, trainListeningPattern]
+  );
 
   // Search Section Handlers
   const executeSearchQuery = async (
@@ -515,16 +894,22 @@ export default function App() {
     } else {
       setActiveSearchCategory(null);
     }
+    trainListeningPattern({
+      type: 'search_intent',
+      customGenre: categoryCard?.name,
+      customQuery: queryText,
+    });
     try {
       const res = await fetchPersonalizedYouTubeMusic(
         moodProfile,
         listeningHistory,
         activeKeepNote,
-        queryText
+        queryText,
+        learnedProfile
       );
       const tagged = res.recommendedTracks.map((t) => ({
         ...t,
-        categoryTag: categoryCard?.name || 'Search',
+        categoryTag: categoryCard?.name || t.categoryTag || 'Search',
       }));
       setSearchResultsYt(tagged);
     } finally {
@@ -589,6 +974,22 @@ export default function App() {
 
   const handleAddSongToSelectedPlaylist = (song: LibrarySongItem) => {
     if (!selectedPlaylist) return;
+    if (song.videoId) {
+      trainListeningPattern({
+        type: 'add_playlist',
+        track: {
+          videoId: song.videoId,
+          title: song.title,
+          channelTitle: song.artist,
+          thumbnailUrl: song.thumbnailUrl,
+          publishedAt: song.addedAt,
+          sourceType: 'liked',
+          matchReason: 'Added to Playlist',
+          matchScore: 98,
+          categoryTag: song.genre,
+        },
+      });
+    }
     setPlaylists((prev) =>
       prev.map((pl) => {
         if (pl.id !== selectedPlaylist.id) return pl;
@@ -658,7 +1059,7 @@ export default function App() {
       const syncRes = await listGoogleKeepNotes(keepNotes);
       setKeepNotes(syncRes.notes);
       setKeepStatusBanner(
-        'Keep notes synced with your YouTube Music recommendation engine.'
+        'Keep notes synced with your personalized recommendation engine.'
       );
     } finally {
       setIsSyncingKeep(false);
@@ -674,7 +1075,7 @@ export default function App() {
         newNoteTitle.trim() || `${moodProfile.presetName} Note`,
         newNoteBody.trim(),
         moodProfile.presetName,
-        currentTrack?.title || 'YouTube Music'
+        currentTrack?.title || 'AuraTune'
       );
       setKeepNotes((prev) => [res.note, ...prev]);
       setActiveKeepNoteId(res.note.id);
@@ -686,9 +1087,9 @@ export default function App() {
   };
 
   const handleSaveYouTubeTrackToKeep = (ytTrack: YouTubeMusicTrack) => {
-    setNewNoteTitle(`YouTube Music Note: ${ytTrack.title}`);
+    setNewNoteTitle(`Music Note: ${ytTrack.title}`);
     setNewNoteBody(
-      `Track: "${ytTrack.title}" by ${ytTrack.channelTitle} (https://music.youtube.com/watch?v=${ytTrack.videoId}). Mood: ${moodProfile.presetName}.`
+      `Track: "${ytTrack.title}" by ${ytTrack.channelTitle}. Mood: ${moodProfile.presetName}.`
     );
     setActiveSection('library');
     setLibrarySubTab('keep-notes');
@@ -814,283 +1215,74 @@ export default function App() {
           ) : (
             <button
               type="button"
-              onClick={syncHomeYouTubeRecommendations}
-              disabled={isLoadingYouTube}
-              className="px-3 sm:px-4 py-1.5 sm:py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5"
+              onClick={() => logout()}
+              className="px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span className="sm:hidden">
-                {isLoadingYouTube ? 'Updating...' : 'Refresh Mix'}
-              </span>
-              <span className="hidden sm:inline">
-                {isLoadingYouTube
-                  ? 'Updating Mix...'
-                  : 'Refresh Recommendations'}
-              </span>
+              <LogOut className="w-3.5 h-3.5 text-slate-400" />
+              <span>Sign Out</span>
             </button>
           )}
         </div>
       </header>
 
       <main className="mx-auto max-w-[1380px] px-3.5 sm:px-6 pt-4 sm:pt-8 space-y-6 sm:space-y-10">
-        {/* Android / Mobile PWA Install Bar */}
-        {!isInstalled && (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-xl bg-slate-900/90 border border-slate-800/90">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-                <Smartphone className="w-4 h-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold text-white truncate">
-                  Install AuraTune on Your Android Phone
-                </p>
-                <p className="text-[11px] text-slate-400 line-clamp-1">
-                  Full-screen mobile playback & auto-cached recent songs
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-              {isInstallable && (
-                <button
-                  type="button"
-                  onClick={promptInstall}
-                  className="flex-1 sm:flex-initial justify-center px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors flex items-center gap-1.5"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Install App</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setIsAndroidModalOpen(true)}
-                className="flex-1 sm:flex-initial justify-center px-3 py-1.5 text-xs font-medium text-emerald-300 bg-slate-950/90 hover:bg-slate-800 border border-emerald-500/30 rounded-lg transition-colors flex items-center gap-1.5"
-              >
-                <Smartphone className="w-3.5 h-3.5" />
-                <span>Android Setup & QR</span>
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* =========================================================
-            SECTION 1: HOME (Recommended YouTube Music Based on Listening & Mood)
+            SECTION 1: HOME (Clean Personalized Music Feed)
            ========================================================= */}
         {activeSection === 'home' && (
-          <div className="space-y-6 sm:space-y-10">
-            {/* Hero Split: Listening-Driven YouTube Music + Mood Calibration */}
-            <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-8 items-stretch border-b border-slate-800/80 pb-6 sm:pb-10">
-              <div className="lg:col-span-7 flex flex-col justify-between space-y-4 sm:space-y-6">
-                <div className="space-y-2 sm:space-y-3">
-                  <p className="text-[11px] sm:text-xs font-medium text-emerald-400 tracking-wide truncate">
-                    Home · YouTube Music & Mood Discovery{' '}
-                    {user
-                      ? `· ${user.displayName || user.email}`
-                      : ''}
-                  </p>
-                  <h1
-                    className="text-2xl sm:text-4xl lg:text-[40px] font-bold tracking-tight text-white leading-[1.18]"
-                    style={{ textWrap: 'balance' }}
-                  >
-                    Recommended YouTube Music shaped by your recent listening.
-                  </h1>
-                  <p className="text-xs sm:text-base text-slate-300 max-w-2xl leading-relaxed">
-                    Every song you play streams seamlessly in the background
-                    audio bar and is automatically cached to personalize your
-                    YouTube Music recommendations ({moodProfile.presetName}).
-                  </p>
-                </div>
-
-                {/* Quick Mood Preset Bar */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span>Current Listening Mood</span>
-                    <button
-                      type="button"
-                      onClick={() => setShowMoodSlidersOnHome((s) => !s)}
-                      className="text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1"
-                    >
-                      <Sliders className="w-3.5 h-3.5" />
-                      <span>
-                        {showMoodSlidersOnHome
-                          ? 'Hide Sliders'
-                          : 'Mood Sliders'}
-                      </span>
-                    </button>
-                  </div>
-                  <div className="flex overflow-x-auto no-scrollbar sm:flex-wrap items-center gap-1.5 p-1.5 bg-slate-900/90 border border-slate-800/80 rounded-xl">
-                    {MOOD_PRESETS.map((preset) => {
-                      const isActive =
-                        moodProfile.presetName === preset.presetName;
-                      return (
-                        <button
-                          key={preset.presetName}
-                          type="button"
-                          onClick={() => setMoodProfile(preset)}
-                          className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-                            isActive
-                              ? 'bg-emerald-500 text-slate-950 font-semibold'
-                              : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
-                          }`}
-                        >
-                          {preset.presetName}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Optional Fine-Tune Mood Sliders Drawer on Home */}
-                {showMoodSlidersOnHome && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-slate-800/80">
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-slate-300">Energy</span>
-                        <span className="font-mono-tabular text-emerald-400">
-                          {moodProfile.energy}%
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={10}
-                        max={100}
-                        value={moodProfile.energy}
-                        onChange={(e) =>
-                          setMoodProfile((p) => ({
-                            ...p,
-                            presetName: 'Custom Mood',
-                            energy: Number(e.target.value),
-                          }))
-                        }
-                        className="mood-slider w-full"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-slate-300">Warmth / Valence</span>
-                        <span className="font-mono-tabular text-emerald-400">
-                          {moodProfile.valence}%
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={10}
-                        max={100}
-                        value={moodProfile.valence}
-                        onChange={(e) =>
-                          setMoodProfile((p) => ({
-                            ...p,
-                            presetName: 'Custom Mood',
-                            valence: Number(e.target.value),
-                          }))
-                        }
-                        className="mood-slider w-full"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-slate-300">Focus</span>
-                        <span className="font-mono-tabular text-emerald-400">
-                          {moodProfile.focus}%
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={10}
-                        max={100}
-                        value={moodProfile.focus}
-                        onChange={(e) =>
-                          setMoodProfile((p) => ({
-                            ...p,
-                            presetName: 'Custom Mood',
-                            focus: Number(e.target.value),
-                          }))
-                        }
-                        className="mood-slider w-full"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex flex-wrap items-center gap-2.5 pt-1">
-                  {ytRecommendedTracks[0] && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handlePlayYouTubeTrack(ytRecommendedTracks[0])
-                      }
-                      className="flex-1 sm:flex-initial justify-center px-4 sm:px-5 py-2.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
-                    >
-                      {isPlaying &&
-                      currentTrack?.videoId ===
-                        ytRecommendedTracks[0].videoId ? (
-                        <>
-                          <Pause className="w-4 h-4 fill-current" />
-                          <span>Pause Top Match</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-4 h-4 fill-current" />
-                          <span>Play Top Match</span>
-                        </>
-                      )}
-                    </button>
-                  )}
+          <div className="space-y-8">
+            {/* Clean Recently Played Bar (only shown once user has played tracks) */}
+            {autoCachedSongs.length > 0 && (
+              <section className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-base sm:text-lg font-bold text-white">
+                    Recently Played
+                  </h2>
                   <button
                     type="button"
-                    onClick={syncHomeYouTubeRecommendations}
-                    disabled={isLoadingYouTube}
-                    className="flex-1 sm:flex-initial justify-center px-3.5 sm:px-4 py-2.5 text-xs font-semibold text-slate-200 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0"
+                    onClick={() => {
+                      setActiveSection('library');
+                      setLibrarySubTab('auto-cache');
+                    }}
+                    className="text-xs font-medium text-emerald-400 hover:text-emerald-300"
                   >
-                    <RefreshCw
-                      className={`w-3.5 h-3.5 text-emerald-400 ${
-                        isLoadingYouTube ? 'animate-spin' : ''
-                      }`}
-                    />
-                    <span>Refresh From History</span>
+                    See All
                   </button>
                 </div>
-              </div>
 
-              {/* Right Spotlight: Recent Hearing & Auto-Cache Status Card */}
-              <div className="lg:col-span-5 rounded-xl border border-slate-800/80 bg-slate-900/50 p-4 sm:p-6 flex flex-col justify-between gap-4 sm:gap-5">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-emerald-400">
-                      Listening Profile & Auto-Cache Active
-                    </span>
-                    <span className="text-xs font-mono-tabular text-slate-400">
-                      {autoCachedSongs.length} Cached · {totalCacheSizeMb} MB
-                    </span>
-                  </div>
-                  <h2 className="text-lg font-bold text-white">
-                    Recent Hearing Influence
-                  </h2>
-                  <p className="text-xs text-slate-400">
-                    Songs you listen to are auto-cached and used to tailor your
-                    Home YouTube Music recommendations:
-                  </p>
-                </div>
-
-                {autoCachedSongs.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-slate-400 border-y border-slate-800/70">
-                    Click Play on any recommended song below to start building
-                    your auto-cached recent hearing history.
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-800/70">
-                    {autoCachedSongs.slice(0, 3).map((item) => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {autoCachedSongs.slice(0, 3).map((item) => {
+                    const isCurrent =
+                      Boolean(item.videoId) &&
+                      currentTrack?.videoId === item.videoId;
+                    return (
                       <div
                         key={item.id}
-                        className="py-2.5 flex items-center justify-between gap-3"
+                        className="rounded-xl border border-slate-800/80 bg-slate-900/50 px-3.5 py-2.5 flex items-center justify-between gap-3"
                       >
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold text-white truncate">
-                            {item.title}
-                          </p>
-                          <p className="text-[11px] text-slate-400 truncate">
-                            {item.artist} · Heard {item.playCount}x
-                          </p>
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          {item.thumbnailUrl ? (
+                            <img
+                              src={item.thumbnailUrl}
+                              alt={item.title}
+                              referrerPolicy="no-referrer"
+                              className="w-11 h-11 rounded-lg object-cover border border-slate-800 shrink-0"
+                            />
+                          ) : (
+                            <div className="w-11 h-11 rounded-lg bg-slate-800 flex items-center justify-center shrink-0">
+                              <Radio className="w-4 h-4 text-emerald-400" />
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-white truncate">
+                              {item.title}
+                            </p>
+                            <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                              {item.artist}
+                            </p>
+                          </div>
                         </div>
+
                         <button
                           type="button"
                           onClick={() => {
@@ -1102,48 +1294,36 @@ export default function App() {
                                 thumbnailUrl: item.thumbnailUrl,
                                 publishedAt: item.lastHeardAt,
                                 sourceType: 'recommended',
-                                matchReason: 'Replayed from Auto-Cache',
+                                matchReason: 'Recently Played',
                                 matchScore: 98,
                               });
                             }
                           }}
-                          className="px-2.5 py-1 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors shrink-0"
+                          className="w-8 h-8 rounded-full bg-emerald-400 hover:bg-emerald-300 text-slate-950 flex items-center justify-center transition-colors shrink-0"
+                          aria-label={`Play ${item.title}`}
                         >
-                          Replay
+                          {isCurrent && isPlaying ? (
+                            <Pause className="w-3.5 h-3.5 fill-current" />
+                          ) : (
+                            <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                          )}
                         </button>
                       </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs">
-                  <span className="text-slate-400 truncate">
-                    Active Profile: {ytActiveQueryUsed || moodProfile.presetName}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveSection('library');
-                      setLibrarySubTab('auto-cache');
-                    }}
-                    className="text-emerald-400 hover:text-emerald-300 font-medium whitespace-nowrap ml-2"
-                  >
-                    View Auto-Cache
-                  </button>
+                    );
+                  })}
                 </div>
-              </div>
-            </section>
+              </section>
+            )}
 
-            {/* Primary Home Feed: Recommended YouTube Music Based on Listening */}
-            <section className="space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+            {/* Primary Home Feed: Recommended For You */}
+            <section className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-xl font-bold text-white">
-                    01. Recommended YouTube Music For Your Mood & Listening
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Plays directly in the bottom audio player with zero video
-                    popups
+                  <h1 className="text-xl sm:text-2xl font-bold text-white">
+                    Recommended For You
+                  </h1>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Automatically personalized from your listening habits
                   </p>
                 </div>
                 <button
@@ -1151,51 +1331,48 @@ export default function App() {
                   onClick={() => setActiveSection('search')}
                   className="text-xs font-medium text-emerald-400 hover:text-emerald-300 whitespace-nowrap shrink-0"
                 >
-                  Explore Genres & Languages in Search
+                  Browse Genres
                 </button>
               </div>
 
               {isLoadingYouTube && ytRecommendedTracks.length === 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {[1, 2, 3, 4, 5, 6].map((n) => (
                     <div
                       key={n}
-                      className="h-40 rounded-xl border border-slate-800/80 bg-slate-900/40 animate-pulse p-5"
+                      className="h-32 rounded-xl border border-slate-800/80 bg-slate-900/40 animate-pulse p-4"
                     />
                   ))}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {ytRecommendedTracks.map((yt) => {
                     const isCurrent = currentTrack?.videoId === yt.videoId;
                     const inLib = isYtTrackInLibrary(yt.videoId);
                     return (
                       <div
                         key={yt.videoId}
-                        className={`rounded-xl border p-4 transition-colors flex flex-col justify-between gap-4 ${
+                        className={`rounded-xl border p-4 transition-colors flex flex-col justify-between gap-3.5 ${
                           isCurrent
                             ? 'border-emerald-500/60 bg-slate-900/90'
                             : 'border-slate-800/80 bg-slate-900/40 hover:bg-slate-900/75'
                         }`}
                       >
-                        <div className="flex items-start gap-3.5">
+                        <div className="flex items-center gap-3.5">
                           {yt.thumbnailUrl ? (
                             <img
                               src={yt.thumbnailUrl}
                               alt={yt.title}
                               referrerPolicy="no-referrer"
-                              className="w-16 h-16 rounded-lg object-cover border border-slate-800 shrink-0"
+                              className="w-14 h-14 rounded-lg object-cover border border-slate-800 shrink-0"
                             />
                           ) : (
-                            <div className="w-16 h-16 rounded-lg bg-slate-800 flex items-center justify-center shrink-0">
+                            <div className="w-14 h-14 rounded-lg bg-slate-800 flex items-center justify-center shrink-0">
                               <Radio className="w-5 h-5 text-emerald-400" />
                             </div>
                           )}
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs font-mono-tabular text-emerald-400">
-                              {yt.matchScore}% Match · YouTube Music
-                            </p>
-                            <h3 className="text-sm font-semibold text-white line-clamp-2 mt-0.5">
+                            <h3 className="text-sm font-semibold text-white line-clamp-2">
                               {yt.title}
                             </h3>
                             <p className="text-xs text-slate-400 truncate mt-1">
@@ -1204,11 +1381,7 @@ export default function App() {
                           </div>
                         </div>
 
-                        <p className="text-xs text-slate-400 line-clamp-1">
-                          {yt.matchReason}
-                        </p>
-
-                        <div className="flex items-center justify-between pt-3 border-t border-slate-800/70">
+                        <div className="flex items-center justify-between pt-2.5 border-t border-slate-800/70 gap-2">
                           <button
                             type="button"
                             onClick={() => handleToggleYtLibrary(yt)}
@@ -1221,7 +1394,7 @@ export default function App() {
                             {inLib ? (
                               <>
                                 <Check className="w-3.5 h-3.5" />
-                                <span>In Library</span>
+                                <span>Saved</span>
                               </>
                             ) : (
                               <>
@@ -1244,7 +1417,7 @@ export default function App() {
                             ) : (
                               <>
                                 <Play className="w-3.5 h-3.5 fill-current" />
-                                <span>Play Audio</span>
+                                <span>Play</span>
                               </>
                             )}
                           </button>
@@ -1256,33 +1429,47 @@ export default function App() {
               )}
             </section>
 
-            {/* Secondary Home Feed: More YouTube Music Picks From Listening Affinity */}
+            {/* Next Suggested Songs Section (Dynamically Updated Based on Current Listening Song) */}
             {ytLikedSeedTracks.length > 0 && (
-              <section className="space-y-5">
-                <div>
-                  <h2 className="text-xl font-bold text-white">
-                    02. More YouTube Music Picks From Your Listening Affinity
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Additional YouTube Music streams matched to your listening
-                    session
-                  </p>
+              <section className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="text-lg sm:text-xl font-bold text-white">
+                      Next Suggested Songs
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5 truncate">
+                      {currentTrack
+                        ? `Auto-play queue based on "${currentTrack.title}" by ${currentTrack.channelTitle}`
+                        : 'Suggested next tracks for your listening session'}
+                    </p>
+                  </div>
+                  {ytLikedSeedTracks[0] && (
+                    <button
+                      type="button"
+                      onClick={handleNextTrack}
+                      className="px-3 py-1.5 text-xs font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    >
+                      Play Next Song
+                    </button>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {ytLikedSeedTracks.map((yt) => {
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {ytLikedSeedTracks.map((yt, idx) => {
                     const isCurrent = currentTrack?.videoId === yt.videoId;
                     const inLib = isYtTrackInLibrary(yt.videoId);
                     return (
                       <div
                         key={`seed-${yt.videoId}`}
-                        className={`rounded-xl border p-4 transition-colors flex flex-col justify-between gap-4 ${
+                        className={`rounded-xl border p-4 transition-colors flex flex-col justify-between gap-3.5 ${
                           isCurrent
                             ? 'border-emerald-500/60 bg-slate-900/90'
-                            : 'border-slate-800/80 bg-slate-900/40 hover:bg-slate-900/75'
+                            : idx === 0
+                              ? 'border-emerald-500/40 bg-slate-900/65 hover:bg-slate-900/85'
+                              : 'border-slate-800/80 bg-slate-900/40 hover:bg-slate-900/75'
                         }`}
                       >
-                        <div className="flex items-start gap-3.5">
+                        <div className="flex items-center gap-3.5">
                           {yt.thumbnailUrl ? (
                             <img
                               src={yt.thumbnailUrl}
@@ -1296,13 +1483,15 @@ export default function App() {
                             </div>
                           )}
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs text-emerald-400">
-                              Listening Affinity · YouTube Music
-                            </p>
-                            <h3 className="text-sm font-semibold text-white line-clamp-2 mt-0.5">
+                            {idx === 0 && (
+                              <p className="text-[11px] font-semibold text-emerald-400 mb-0.5">
+                                Up Next in Auto-Play
+                              </p>
+                            )}
+                            <h3 className="text-sm font-semibold text-white line-clamp-2">
                               {yt.title}
                             </h3>
-                            <p className="text-xs text-slate-400 truncate mt-0.5">
+                            <p className="text-xs text-slate-400 truncate mt-1">
                               {yt.channelTitle}
                             </p>
                           </div>
@@ -1311,23 +1500,37 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => handleToggleYtLibrary(yt)}
-                            className="text-xs text-slate-300 hover:text-white"
+                            className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                              inLib
+                                ? 'bg-emerald-500/20 text-emerald-300'
+                                : 'bg-slate-800/80 text-slate-300 hover:text-white'
+                            }`}
                           >
-                            {inLib ? 'Saved in Library' : '+ Save to Library'}
+                            {inLib ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Saved</span>
+                              </>
+                            ) : (
+                              <>
+                                <Heart className="w-3.5 h-3.5" />
+                                <span>+ Library</span>
+                              </>
+                            )}
                           </button>
                           <button
                             type="button"
                             onClick={() => handlePlayYouTubeTrack(yt)}
-                            className="px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md flex items-center gap-1"
+                            className="px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md flex items-center gap-1.5"
                           >
                             {isCurrent && isPlaying ? (
                               <>
-                                <Pause className="w-3 h-3 fill-current" />
+                                <Pause className="w-3.5 h-3.5 fill-current" />
                                 <span>Pause</span>
                               </>
                             ) : (
                               <>
-                                <Play className="w-3 h-3 fill-current" />
+                                <Play className="w-3.5 h-3.5 fill-current" />
                                 <span>Play</span>
                               </>
                             )}
@@ -1352,7 +1555,7 @@ export default function App() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h1 className="text-2xl font-bold text-white">
-                    Search YouTube Music, Genres & Languages
+                    Search Songs, Genres & Languages
                   </h1>
                   <p className="text-xs text-slate-400 mt-1">
                     Search any song or artist, or click a genre/language card
@@ -1577,7 +1780,7 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <h2 className="text-xl font-bold text-white">
                     {activeSearchCategory
-                      ? `${activeSearchCategory.name} — YouTube Music Tracks`
+                      ? `${activeSearchCategory.name} — Featured Tracks`
                       : `Search Results for "${searchInput}"`}
                   </h2>
                   {searchResultsYt.length > 0 && (
@@ -1625,7 +1828,7 @@ export default function App() {
                             )}
                             <div className="min-w-0 flex-1">
                               <p className="text-xs text-emerald-400">
-                                {yt.categoryTag || 'YouTube Music'}
+                                {yt.categoryTag || 'Featured Track'}
                               </p>
                               <h3 className="text-sm font-semibold text-white line-clamp-2 mt-0.5">
                                 {yt.title}
@@ -1798,7 +2001,7 @@ export default function App() {
                             )}
                             <div className="min-w-0 flex-1">
                               <p className="text-xs text-emerald-400">
-                                Saved in Library · YouTube Music
+                                Saved in Library
                               </p>
                               <h3 className="text-sm font-semibold text-white line-clamp-2 mt-0.5">
                                 {song.title}
@@ -1886,9 +2089,9 @@ export default function App() {
                       </h2>
                     </div>
                     <p className="text-xs text-slate-400 max-w-2xl">
-                      When enabled, every YouTube Music song you listen to is
-                      automatically cached locally with its stream pointer,
-                      artwork, and mood context for instant replay.
+                      When enabled, every song you listen to is automatically
+                      cached locally with its stream pointer, artwork, and mood
+                      context for instant replay.
                     </p>
                   </div>
 
@@ -2176,8 +2379,8 @@ export default function App() {
               <section className="space-y-6">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <p className="text-xs text-slate-400">
-                    Link any Google Keep note below to steer your Home YouTube
-                    Music recommendations.
+                    Link any Google Keep note below to steer your Home music
+                    recommendations.
                   </p>
                   <div className="flex items-center gap-3">
                     {!needsAuth && (
@@ -2495,9 +2698,8 @@ export default function App() {
                   {/* Songs Inside Selected Playlist */}
                   {selectedPlaylist.songs.length === 0 ? (
                     <div className="rounded-lg border border-slate-800/70 bg-slate-950/50 p-6 text-center text-xs text-slate-400">
-                      This playlist is empty. Search and add any YouTube Music
-                      song below or quick-add from your Auto-Cached Recent
-                      Hearing songs.
+                      This playlist is empty. Search and add any song below or
+                      quick-add from your Auto-Cached Recent Hearing songs.
                     </div>
                   ) : (
                     <div className="divide-y divide-slate-800/70">
@@ -2572,7 +2774,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Add Songs to Playlist via Live YouTube Music Search */}
+                  {/* Add Songs to Playlist via Live Music Search */}
                   <div className="pt-4 border-t border-slate-800/80 space-y-4">
                     <h3 className="text-sm font-bold text-white">
                       Search & Add Songs to &ldquo;{selectedPlaylist.name}&rdquo;
@@ -2585,7 +2787,7 @@ export default function App() {
                         type="text"
                         value={playlistSearchQuery}
                         onChange={(e) => setPlaylistSearchQuery(e.target.value)}
-                        placeholder="Search any song on YouTube Music to add to this playlist..."
+                        placeholder="Search any song or artist to add to this playlist..."
                         className="flex-1 px-3.5 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-white"
                       />
                       <button
@@ -2620,7 +2822,7 @@ export default function App() {
                                   videoId: yt.videoId,
                                   title: yt.title,
                                   artist: yt.channelTitle,
-                                  genre: 'YouTube Music',
+                                  genre: 'AuraTune Stream',
                                   thumbnailUrl: yt.thumbnailUrl,
                                   addedAt: new Date().toISOString(),
                                   source: 'youtube-music',
