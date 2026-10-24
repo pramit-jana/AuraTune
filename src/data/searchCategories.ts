@@ -1,0 +1,68 @@
+import { SearchCategoryCard } from '../types/music';
+
+export const DEFAULT_SEARCH_CATEGORIES: SearchCategoryCard[] = [
+  {
+    id: 'cat-pop',
+    name: 'Pop',
+    subtitle: 'Global chart anthems & modern hooks',
+    query: 'top pop hits official music video audio',
+    accentColor: '#ec4899',
+    bgGradient: 'linear-gradient(135deg, #1f122b 0%, #3b0d2c 100%)',
+  },
+  {
+    id: 'cat-hiphop',
+    name: 'Hip-Hop',
+    subtitle: 'Lyrical flow, boom-bap & trap beats',
+    query: 'hip hop rap hits official audio',
+    accentColor: '#f59e0b',
+    bgGradient: 'linear-gradient(135deg, #1c1917 0%, #3b230b 100%)',
+  },
+  {
+    id: 'cat-edm',
+    name: 'EDM',
+    subtitle: 'Melodic house, techno & festival energy',
+    query: 'edm melodic house electronic music mix',
+    accentColor: '#10b981',
+    bgGradient: 'linear-gradient(135deg, #091917 0%, #063e31 100%)',
+  },
+  {
+    id: 'cat-hindi',
+    name: 'Hindi',
+    subtitle: 'Bollywood melodies, indie Hindi & soulful acoustics',
+    query: 'hindi bollywood latest hit songs official',
+    accentColor: '#f97316',
+    bgGradient: 'linear-gradient(135deg, #1f140e 0%, #431c0d 100%)',
+  },
+  {
+    id: 'cat-english',
+    name: 'English',
+    subtitle: 'International indie, R&B & contemporary classics',
+    query: 'english chill pop indie rnb songs official',
+    accentColor: '#38bdf8',
+    bgGradient: 'linear-gradient(135deg, #0c1928 0%, #102a45 100%)',
+  },
+  {
+    id: 'cat-bengali',
+    name: 'Bengali',
+    subtitle: 'Modern Bangla band, film ballads & Rabindra fusion',
+    query: 'bengali hit songs bangla music official',
+    accentColor: '#a855f7',
+    bgGradient: 'linear-gradient(135deg, #1a1228 0%, #2e1446 100%)',
+  },
+  {
+    id: 'cat-lofi',
+    name: 'Lo-Fi & Study',
+    subtitle: 'Warm analog tape loops for coding & focus',
+    query: 'lofi hip hop chill beats to study relax',
+    accentColor: '#2dd4bf',
+    bgGradient: 'linear-gradient(135deg, #0d1b1e 0%, #13383c 100%)',
+  },
+  {
+    id: 'cat-rock',
+    name: 'Indie & Alt Rock',
+    subtitle: 'Guitar-driven atmospheric rock & acoustic sessions',
+    query: 'indie rock alternative music official audio',
+    accentColor: '#fb7185',
+    bgGradient: 'linear-gradient(135deg, #1f1218 0%, #3d1424 100%)',
+  },
+];
